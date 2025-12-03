@@ -145,6 +145,8 @@ Password: admin123
 ## 🧪 Test
 
 ### 1. Đăng nhập
+<img width="643" height="808" alt="image" src="https://github.com/user-attachments/assets/e5771098-9ada-4048-bf1d-0366f1b1aeed" />
+
 ```bash
 curl -X POST http://localhost:3000/api/login \
   -H "Content-Type: application/json" \
@@ -152,6 +154,8 @@ curl -X POST http://localhost:3000/api/login \
 ```
 
 ### 2. Điều khiển đèn (qua MQTT)
+<img width="1891" height="777" alt="image" src="https://github.com/user-attachments/assets/f7903555-f70b-4702-92f7-6aad99308178" />
+
 ```bash
 # Từ Node.js console hoặc MQTT client
 mosquitto_pub -h your-broker.emqxsl.com -t home/light/cmd -m "ON"
