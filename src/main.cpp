@@ -1,271 +1,348 @@
-// ============================================
-// IMPORT THƯ VIỆN
-// ============================================
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
-#include <WiFiClientSecure.h>  
+#include <ESP32Servo.h>
+#include <LiquidCrystal_I2C.h>
+#include <MFRC522.h>
+#include <SPI.h>
 #include <DHT.h>
-#include "config.h"
+
 #include "credentials.h"
+#include "config.h"
 
-// ============================================
-// ĐỊNH NGHĨA PINS
-// ============================================
-#define DHT_PIN 4           // DHT22 data pin
-#define DHT_TYPE DHT22
-#define LED_PIN 2           // LED built-in
-#define FAN_PIN 5           // Relay quạt
-#define DOOR_PIN 18         // Servo/motor cửa
-#define GAS_PIN 34          // Cảm biến MQ2/MQ5 (analog)
-
-// ============================================
-// KHỞI TẠO ĐỐI TƯỢNG
-// ============================================
+// ================= OBJECTS ================
 WiFiClientSecure espClient;
 PubSubClient client(espClient);
-DHT dht(DHT_PIN, DHT_TYPE);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+MFRC522 rfid(SS_PIN, RST_PIN);
+Servo doorServo;
 
-// ============================================
-// BIẾN TOÀN CỤC
-// ============================================
-unsigned long lastPublish = 0;
-const unsigned long PUBLISH_INTERVAL = 1000;  // Publish mỗi 5 giây
+// ================= SENSORS =================
+#define DHTPIN DHT_PIN
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
 
-// ============================================
-// HÀM KẾT NỐI WIFI
-// ============================================
-void setupWiFi() {
-  Serial.println("\n🌐 Đang kết nối WiFi...");
-  Serial.print("   SSID: ");
-  Serial.println(WIFI_SSID);
-  
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ WiFi connected!");
-    Serial.print("   IP: ");
-    Serial.println(WiFi.localIP());
-    Serial.print("   Signal: ");
-    Serial.print(WiFi.RSSI());
-    Serial.println(" dBm\n");
-  } else {
-    Serial.println("\n❌ WiFi connection failed!");
-    ESP.restart();
+#define GAS_SENSOR_PIN MQ2_PIN
+
+bool lightOn = false;            // LED STATE
+bool fanState = false;           // FAN STATE
+bool autoFanByGas = false;       // MQ2 auto mode
+
+bool doorIsOpen = false;
+
+// Door servo angles
+const int DOOR_CLOSED_ANGLE = 0;
+const int DOOR_OPEN_ANGLE   = 90;
+
+volatile bool doorButtonPressed = false;
+
+// ================= ISR =================
+void IRAM_ATTR doorISR() {
+  doorButtonPressed = true;
+}
+
+// ================= BEEP =================
+void beepBuzzer(int count, int dur) {
+  for (int i = 0; i < count; i++) {
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(dur);
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(dur);
   }
 }
 
-// ============================================
-// CALLBACK NHẬN LỆNH TỪ MQTT
-// ============================================
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  // Chuyển payload thành String
-  String message = "";
-  for (unsigned int i = 0; i < length; i++) {
-    message += (char)payload[i];
+// ================= LCD DISPLAY =================
+void showEnvironment(float t, float h, int gas) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("T:");
+  lcd.print(t);
+  lcd.print(" H:");
+  lcd.print(h);
+
+  lcd.setCursor(0, 1);
+  lcd.print("Gas:");
+  lcd.print(gas);
+
+  Serial.printf("[ENV] T=%.1f  H=%.1f  Gas=%d\n", t, h, gas);
+}
+
+// ================= DOOR CONTROL =================
+void openDoor() {
+  if (!doorIsOpen) {
+    doorServo.write(DOOR_OPEN_ANGLE);
+    doorIsOpen = true;
+    client.publish("home/door/status", "OPEN");
   }
-  
-  String topicStr = String(topic);
-  Serial.println("📥 MQTT received:");
-  Serial.println("   Topic: " + topicStr);
-  Serial.println("   Message: " + message);
-  
-  // ---- ĐIỀU KHIỂN ĐÈN ----
-  if (topicStr == "home/light/cmd") {
-    if (message == "ON") {
+}
+
+void closeDoor() {
+  if (doorIsOpen) {
+    doorServo.write(DOOR_CLOSED_ANGLE);
+    doorIsOpen = false;
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Cua da dong");
+    client.publish("home/door/status", "CLOSE");
+  }
+}
+
+// ================= MQTT CALLBACK =================
+void mqttCallback(char *topic, byte *message, unsigned int len) {
+  String cmd = "";
+  for (int i = 0; i < len; i++) cmd += (char)message[i];
+  cmd.trim();
+  cmd.toUpperCase();
+
+  Serial.printf("MQTT [%s] → %s\n", topic, cmd.c_str());
+
+  // === DOOR ===
+  if (String(topic) == "home/door/cmd") {
+    if (cmd == "OPEN") openDoor();
+    else if (cmd == "CLOSE") closeDoor();
+  }
+
+  // === LIGHT ===
+  if (String(topic) == "home/light/cmd") {
+    if (cmd == "ON") {
+      lightOn = true;
       digitalWrite(LED_PIN, HIGH);
-      Serial.println("   💡 LED: ON\n");
-    } else if (message == "OFF") {
+      client.publish("home/light/status", "ON");
+    }
+    else if (cmd == "OFF") {
+      lightOn = false;
       digitalWrite(LED_PIN, LOW);
-      Serial.println("   💡 LED: OFF\n");
+      client.publish("home/light/status", "OFF");
     }
   }
-  
-  // ---- ĐIỀU KHIỂN QUẠT ----
-  else if (topicStr == "home/fan/cmd") {
-    if (message == "ON") {
+
+  // === FAN ===
+  if (String(topic) == "home/fan/cmd") {
+    if (cmd == "ON") {
+      fanState = true;
+      autoFanByGas = false;
       digitalWrite(FAN_PIN, HIGH);
-      Serial.println("   🌀 FAN: ON\n");
-    } else if (message == "OFF") {
-      digitalWrite(FAN_PIN, LOW);
-      Serial.println("   🌀 FAN: OFF\n");
+      client.publish("home/fan/status", "ON");
+      Serial.println("🌬️ FAN ON by MQTT");
     }
-  }
-  
-  // ---- ĐIỀU KHIỂN CỬA ----
-  else if (topicStr == "home/door/cmd") {
-    if (message == "OPEN") {
-      // TODO: Thêm code điều khiển servo
-      // servo.write(90);
-      Serial.println("   🚪 DOOR: OPEN\n");
-    } else if (message == "CLOSE") {
-      // servo.write(0);
-      Serial.println("   🚪 DOOR: CLOSE\n");
+    else if (cmd == "OFF") {
+      if (!autoFanByGas) {  // không cho tắt nếu đang auto
+        fanState = false;
+        digitalWrite(FAN_PIN, LOW);
+        client.publish("home/fan/status", "OFF");
+      }
     }
   }
 }
 
-// ============================================
-// HÀM KẾT NỐI MQTT
-// ============================================
-void reconnectMQTT() {
+// ================= MQTT CONNECT =================
+void connectMQTT() {
   while (!client.connected()) {
-    Serial.print("🔌 Connecting to MQTT Broker...");
-    
-    // Tạo client ID ngẫu nhiên
-    String clientId = "ESP32_" + String(random(0xffff), HEX);
-    
-    // Kết nối với username/password
-    if (client.connect(clientId.c_str(), MQTT_USER, MQTT_PASS)) {
-      Serial.println(" ✅ Connected!");
-      Serial.println("   Client ID: " + clientId);
-      
-      // Subscribe các topics điều khiển
+    Serial.println("Connecting MQTT...");
+
+    if (client.connect("ESP32_DOOR_SYS", MQTT_USER, MQTT_PASS)) {
+      Serial.println("MQTT connected!");
+      client.subscribe("home/door/cmd");
       client.subscribe("home/light/cmd");
       client.subscribe("home/fan/cmd");
-      client.subscribe("home/door/cmd");
-      
-      Serial.println("   Subscribed topics:");
-      Serial.println("   - home/light/cmd");
-      Serial.println("   - home/fan/cmd");
-      Serial.println("   - home/door/cmd\n");
-      
     } else {
-      Serial.print(" ❌ Failed, rc=");
+      Serial.print("Failed rc=");
       Serial.println(client.state());
-      Serial.println("   Retry in 5 seconds...\n");
-      delay(5000);
+      delay(2000);
     }
   }
 }
 
-// ============================================
-// HÀM GIẢ LẬP DỮ LIỆU CẢM BIẾN (FAKE DATA)
-// ============================================
-void publishFakeData() {
-  // Nhiệt độ: 20.0 - 35.0°C
-  float temp = random(200, 350) / 10.0;
-  
-  // Độ ẩm: 40.0 - 80.0%
-  float humidity = random(400, 800) / 10.0;
-  
-  // Khí gas: 100 - 500 ppm (thỉnh thoảng vượt ngưỡng 300)
-  int gasPPM = random(100, 500);
-  
-  // Publish lên MQTT
-  client.publish("home/temp", String(temp, 1).c_str());
-  client.publish("home/humidity", String(humidity, 1).c_str());
-  client.publish("home/gas", String(gasPPM).c_str());
-  
-  // Log ra Serial Monitor
-  Serial.println("📤 Published (FAKE DATA):");
-  Serial.printf("   🌡️  Nhiệt độ: %.1f°C\n", temp);
-  Serial.printf("   💧 Độ ẩm: %.1f%%\n", humidity);
-  Serial.printf("   💨 Khí gas: %d ppm", gasPPM);
-  
-  // Cảnh báo nếu gas cao
-  if (gasPPM > 300) {
-    Serial.print(" ⚠️  CẢNH BÁO!");
-  }
-  Serial.println("\n");
-}
+// ================= NETWORK INIT =================
+void initNetwork() {
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-// ============================================
-// HÀM ĐỌC CẢM BIẾN THẬT (REAL DATA)
-// ============================================
-void publishRealData() {
-  // Đọc DHT22
-  float temp = dht.readTemperature();
-  float humidity = dht.readHumidity();
-  
-  // Đọc cảm biến gas
-  int gasRaw = analogRead(GAS_PIN);
-  int gasPPM = map(gasRaw, 0, 4095, 0, 1000);
-  
-  // Kiểm tra dữ liệu hợp lệ
-  if (isnan(temp) || isnan(humidity)) {
-    Serial.println("❌ Lỗi đọc DHT22!\n");
-    return;
+  Serial.print("Connecting WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
   }
-  
-  // Publish lên MQTT
-  client.publish("home/temp", String(temp, 1).c_str());
-  client.publish("home/humidity", String(humidity, 1).c_str());
-  client.publish("home/gas", String(gasPPM).c_str());
-  
-  // Log ra Serial Monitor
-  Serial.println("📤 Published (REAL DATA):");
-  Serial.printf("   🌡️  Nhiệt độ: %.1f°C\n", temp);
-  Serial.printf("   💧 Độ ẩm: %.1f%%\n", humidity);
-  Serial.printf("   💨 Khí gas: %d ppm", gasPPM);
-  
-  if (gasPPM > 300) {
-    Serial.print(" ⚠️  CẢNH BÁO!");
-  }
-  Serial.println("\n");
-}
+  Serial.println(" OK");
 
-// ============================================
-// SETUP
-// ============================================
-void setup() {
-  // Khởi tạo Serial
-  Serial.begin(115200);
-  delay(1000);
-  Serial.println("\n\n==========================================");
-  Serial.println("  🏠 UTC SMARTHOME ESP32 - STARTING...");
-  Serial.println("==========================================\n");
-  
-  // Cấu hình GPIO
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(FAN_PIN, OUTPUT);
-  pinMode(DOOR_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
-  digitalWrite(FAN_PIN, LOW);
-  digitalWrite(DOOR_PIN, LOW);
-  
-  // Khởi tạo DHT22
-  dht.begin();
-  
-  // Kết nối WiFi
-  setupWiFi();
-    // Cấu hình MQTT
-  espClient.setInsecure();  // Bỏ qua SSL cert (dev only)
+  espClient.setInsecure();
   client.setServer(MQTT_BROKER, MQTT_PORT);
   client.setCallback(mqttCallback);
-  client.setKeepAlive(60);
-  
-  // Khởi tạo random seed
-  randomSeed(analogRead(0));
-  
-  Serial.println("🎲 CHẾ ĐỘ: FAKE DATA (Giả lập cảm biến)\n");
-  Serial.println("==================================================\n");
 }
 
+// ================= FAN UPDATE =================
+void updateFan() {
+  digitalWrite(FAN_PIN, fanState ? HIGH : LOW);
+  client.publish("home/fan/status", fanState ? "ON" : "OFF");
+}
 
-// ============================================
-// LOOP
-// ============================================
+// ================= RFID =================
+void handleRFID() {
+  if (!rfid.PICC_IsNewCardPresent()) return;
+  if (!rfid.PICC_ReadCardSerial()) return;
+
+  beepBuzzer(2, 80);
+  openDoor();
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Chao mung tro ve");
+  lcd.setCursor(0, 1);
+  lcd.print("Cua dang mo...");
+
+  delay(2000);
+
+  String uid = "";
+  for (byte i = 0; i < rfid.uid.size; i++)
+    uid += String(rfid.uid.uidByte[i], HEX);
+
+  client.publish("home/door/rfid", uid.c_str());
+
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+
+  Serial.println("RFID DETECTED");
+}
+
+// ================= SETUP =================
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(DOOR_BUTTON, INPUT_PULLUP);
+  pinMode(GAS_SENSOR_PIN, INPUT);
+  pinMode(PIR_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(SWITCH_PIN, INPUT_PULLUP);
+  pinMode(FAN_PIN, OUTPUT);
+  pinMode(FAN_SWITCH, INPUT_PULLUP);
+
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(FAN_PIN, LOW);
+
+  attachInterrupt(digitalPinToInterrupt(DOOR_BUTTON), doorISR, FALLING);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.print("Booting...");
+  delay(800);
+  lcd.clear();
+
+  dht.begin();
+  SPI.begin(18, 19, 23, SS_PIN);
+  rfid.PCD_Init();
+
+  doorServo.attach(SERVO_PIN);
+  doorServo.write(DOOR_CLOSED_ANGLE);
+
+  initNetwork();
+  Serial.println("System Ready");
+}
+
+// ================= LOOP =================
 void loop() {
-  // Đảm bảo MQTT luôn kết nối
-  if (!client.connected()) {
-    reconnectMQTT();
-  }
+  if (!client.connected()) connectMQTT();
   client.loop();
-  
-  // Publish dữ liệu cảm biến mỗi 5 giây
-  if (millis() - lastPublish >= PUBLISH_INTERVAL) {
-    lastPublish = millis();
-    
-    // ⚠️ CHUYỂN ĐỔI GIỮA FAKE/REAL DATA
-    publishFakeData();    // ← Dùng dữ liệu giả
-    // publishRealData();  // ← Uncomment khi có DHT22 thật
+
+  handleRFID();
+
+  // ================= SENSOR EVERY 2s =================
+  static unsigned long lastSensor = 0;
+  if (millis() - lastSensor > 2000) {
+    lastSensor = millis();
+
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    int gas = analogRead(GAS_SENSOR_PIN);
+
+    client.publish("home/temp", String(t).c_str());
+    client.publish("home/humidity", String(h).c_str());
+    client.publish("home/gas", String(gas).c_str());
+
+    if (doorIsOpen) showEnvironment(t, h, gas);
+
+    // ======================================================
+    //                MQ2 AUTO FAN LOGIC
+    // ======================================================
+    if (gas >= 600) {
+      autoFanByGas = true;
+      fanState = true;
+      updateFan();
+      digitalWrite(BUZZER_PIN, HIGH);
+      Serial.println("🚨 GAS >= 600 → BUZZER + AUTO FAN");
+    }
+    else if (gas >= 400) {
+      autoFanByGas = true;
+      fanState = true;
+      updateFan();
+      digitalWrite(BUZZER_PIN, LOW);
+      Serial.println("⚠️ GAS >= 400 → AUTO FAN");
+    }
+    else if (gas < 350) {
+      if (autoFanByGas) {
+        autoFanByGas = false;
+        digitalWrite(BUZZER_PIN, LOW);
+        Serial.println("✅ Gas normal → Exit AUTO FAN MODE");
+      }
+    }
   }
+
+  // ================= BUTTON CLOSE DOOR =================
+  if (doorButtonPressed) {
+    doorButtonPressed = false;
+    closeDoor();
+    beepBuzzer(1, 80);
+  }
+
+  // ======================================================
+  //                  PIR → AUTO LIGHT ONCE
+  // ======================================================
+  int pirState = digitalRead(PIR_PIN);
+  static bool pirTriggered = false;
+  static unsigned long a = 0;
+
+  if (pirState == HIGH && !pirTriggered) {
+    pirTriggered = true;
+    lightOn = true;
+    digitalWrite(LED_PIN, HIGH);
+    client.publish("home/light/status", "ON");
+    Serial.println("PIR → LED ON");
+  }
+
+  if (pirState == LOW) pirTriggered = false;
+
+  // ======================================================
+  //         SWITCH → MANUAL LIGHT TOGGLE
+  // ======================================================
+  static bool lastSwitch = HIGH;
+  bool currentSwitch = digitalRead(SWITCH_PIN);
+
+  if (currentSwitch == LOW && lastSwitch == HIGH) {
+    lightOn = !lightOn;
+    digitalWrite(LED_PIN, lightOn ? HIGH : LOW);
+    client.publish("home/light/status", lightOn ? "ON" : "OFF");
+    delay(200);
+  }
+
+  lastSwitch = currentSwitch;
+  
+  // ======================================================
+  //         FAN SWITCH → MANUAL FAN CONTROL
+  // ======================================================
+  static bool lastFanSw = HIGH;
+  bool nowFanSw = digitalRead(FAN_SWITCH);
+
+  if (nowFanSw == LOW && lastFanSw == HIGH) {
+
+    if (!autoFanByGas) {
+      fanState = !fanState;
+      updateFan();
+      Serial.println("🖐 FAN SWITCH → TOGGLE");
+    } else {
+      Serial.println("⛔ AUTO FAN ACTIVE → MANUAL DISABLED");
+    }
+
+    delay(250);
+  }
+
+  lastFanSw = nowFanSw;
 }
