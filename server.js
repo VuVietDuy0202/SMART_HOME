@@ -34,13 +34,13 @@ function loadUsers() {
     console.log("⚠️  users.json không tồn tại, tạo user mặc định...");
     const defaultUser = {
       email: "admin@utc.com",
-      password: bcrypt.hashSync("admin123", 10),
+      password: bcrypt.hashSync("admin1234", 10),
       name: "Admin",
     };
     fs.writeFileSync(USERS_FILE, JSON.stringify([defaultUser], null, 2));
     console.log("✅ Đã tạo user mặc định:");
     console.log("   Email: admin@utc.com");
-    console.log("   Password: admin123\n");
+    console.log("   Password: admin1234\n");
   }
   return JSON.parse(fs.readFileSync(USERS_FILE, "utf8"));
 }
@@ -194,6 +194,9 @@ client.on("connect", () => {
     config.TOPICS.TEMP,
     config.TOPICS.HUMIDITY,
     config.TOPICS.GAS,
+    config.TOPICS.DOOR_STATUS,
+    config.TOPICS.LIGHT_STATUS, // ← THÊM
+    config.TOPICS.FAN_STATUS, // ← THÊM
   ]);
 });
 
@@ -204,6 +207,18 @@ client.on("message", (topic, message) => {
   if (topic === config.TOPICS.GAS) sensorData.gas = val;
   sensorData.lastUpdate = new Date().toISOString();
   io.emit("sensor-update", sensorData);
+  if (topic === config.TOPICS.LIGHT_STATUS) {
+    deviceStatus.light = val;
+    io.emit("device-status", deviceStatus);
+  }
+  if (topic === config.TOPICS.FAN_STATUS) {
+    deviceStatus.fan = val;
+    io.emit("device-status", deviceStatus);
+  }
+  if (topic === config.TOPICS.DOOR_STATUS) {
+    deviceStatus.door = val;
+    io.emit("device-status", deviceStatus);
+  }
 });
 
 io.on("connection", (socket) => {
