@@ -180,27 +180,57 @@ void handleRFID() {
   if (!rfid.PICC_IsNewCardPresent()) return;
   if (!rfid.PICC_ReadCardSerial()) return;
 
-  beepBuzzer(2, 80);
-  openDoor();
-
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Chao mung tro ve");
-  lcd.setCursor(0, 1);
-  lcd.print("Cua dang mo...");
-
-  delay(2000);
-
+  // Đọc UID thẻ
   String uid = "";
   for (byte i = 0; i < rfid.uid.size; i++)
     uid += String(rfid.uid.uidByte[i], HEX);
 
-  client.publish("home/door/rfid", uid.c_str());
+  // Kiểm tra quẹt 2 lần liên tiếp (trong vòng 3 giây)
+  static String lastUID = "";
+  static unsigned long lastScanTime = 0;
+  unsigned long currentTime = millis();
+
+  if (uid == lastUID && (currentTime - lastScanTime) < 3000) {
+    // ===== QUẸT LẦN 2 → ĐÓNG CỬA =====
+    beepBuzzer(1, 80);
+    closeDoor();
+    
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Tam biet!");
+    lcd.setCursor(0, 1);
+    lcd.print("Cua dang dong...");
+    
+    Serial.println("RFID: Quẹt lần 2 → ĐÓNG CỬA");
+    client.publish("home/door/rfid", (uid + "_CLOSE").c_str());
+    
+    // Reset để tránh đóng liên tục
+    lastUID = "";
+    lastScanTime = 0;
+    
+  } else {
+    // ===== QUẸT LẦN 1 → MỞ CỬA =====
+    beepBuzzer(2, 80);
+    openDoor();
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Chao mung tro ve");
+    lcd.setCursor(0, 1);
+    lcd.print("Cua dang mo...");
+
+    Serial.println("RFID: Quẹt lần 1 → MỞ CỬA");
+    client.publish("home/door/rfid", uid.c_str());
+    
+    // Lưu lại để so sánh lần sau
+    lastUID = uid;
+    lastScanTime = currentTime;
+  }
+
+  delay(1000); // Chống quẹt liên tục
 
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
-
-  Serial.println("RFID DETECTED");
 }
 
 // ================= SETUP =================
@@ -223,7 +253,7 @@ void setup() {
 
   lcd.init();
   lcd.backlight();
-  lcd.print("Booting...");
+  lcd.print("Bootloading...");
   delay(800);
   lcd.clear();
 
@@ -252,13 +282,13 @@ void loop() {
 
     float t = dht.readTemperature();
     float h = dht.readHumidity();
-    int gas = analogRead(GAS_SENSOR_PIN);
+    int gas = analogRead(GAS_SENSOR_PIN) - 520;
 
     client.publish("home/temp", String(t).c_str());
     client.publish("home/humidity", String(h).c_str());
     client.publish("home/gas", String(gas).c_str());
 
-    if (doorIsOpen) showEnvironment(t, h, gas);
+    showEnvironment(t, h, gas);
 
     // ======================================================
     //                MQ2 AUTO FAN LOGIC
