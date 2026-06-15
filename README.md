@@ -145,7 +145,7 @@ Password: admin123
 ## 🧪 Test
 
 ### 1. Đăng nhập
-<img width="600" height="759" alt="image" src="https://github.com/user-attachments/assets/4c2c8c17-ddbd-4237-9965-e7ba53ffcf1f" />
+<img width="450" height="570" alt="image" src="https://github.com/user-attachments/assets/4c2c8c17-ddbd-4237-9965-e7ba53ffcf1f" />
 
 ```bash
 curl -X POST http://localhost:3000/api/login \
