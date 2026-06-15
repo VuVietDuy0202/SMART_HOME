@@ -33,7 +33,7 @@ function loadUsers() {
   if (!fs.existsSync(USERS_FILE)) {
     console.log("⚠️  users.json không tồn tại, tạo user mặc định...");
     const defaultUser = {
-      email: "admin@utc.com",
+      email: "admin@hus.com",
       password: bcrypt.hashSync("admin1234", 10),
       name: "Admin",
     };
