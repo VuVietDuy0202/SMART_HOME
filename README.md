@@ -154,7 +154,8 @@ curl -X POST http://localhost:3000/api/login \
 ```
 
 ### 2. Điều khiển đèn (qua MQTT)
-<img width="1956" height="804" alt="image" src="https://github.com/user-attachments/assets/c3be8838-e9ee-4a58-84d4-607f9b876013" />
+<img width="1957" height="804" alt="image" src="https://github.com/user-attachments/assets/ebdbfb2a-5f34-4013-ac57-a622a83f49b4" />
+
 
 
 ```bash
