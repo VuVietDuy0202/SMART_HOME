@@ -145,7 +145,7 @@ Password: admin123
 ## 🧪 Test
 
 ### 1. Đăng nhập
-<img width="643" height="808" alt="image" src="https://github.com/user-attachments/assets/e5771098-9ada-4048-bf1d-0366f1b1aeed" />
+<img width="1118" height="1407" alt="image" src="https://github.com/user-attachments/assets/4c2c8c17-ddbd-4237-9965-e7ba53ffcf1f" />
 
 ```bash
 curl -X POST http://localhost:3000/api/login \
@@ -154,7 +154,8 @@ curl -X POST http://localhost:3000/api/login \
 ```
 
 ### 2. Điều khiển đèn (qua MQTT)
-<img width="1891" height="777" alt="image" src="https://github.com/user-attachments/assets/f7903555-f70b-4702-92f7-6aad99308178" />
+<img width="1956" height="804" alt="image" src="https://github.com/user-attachments/assets/c3be8838-e9ee-4a58-84d4-607f9b876013" />
+
 
 ```bash
 # Từ Node.js console hoặc MQTT client
